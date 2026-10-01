@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="th"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ระบบจัดการโครงงาน</title>
+<style>
+:root{--bg:#f6f7fb;--c:#fff;--t:#1d2433;--m:#6b7280;--p:#2f5bea;--r:#d33;--b:#e3e6ee}
+@media(prefers-color-scheme:dark){:root{--bg:#12151c;--c:#1b202b;--t:#e8ebf2;--m:#9aa3b5;--b:#2b3242}}
+*{box-sizing:border-box}body{margin:0;font-family:system-ui,"Noto Sans Thai",sans-serif;background:var(--bg);color:var(--t)}
+main{max-width:960px;margin:auto;padding:20px}h1{font-size:1.4rem}
+.card{background:var(--c);border:1px solid var(--b);border-radius:10px;padding:16px;margin-bottom:16px}
+form{display:grid;gap:10px;grid-template-columns:1fr 1fr}form .w{grid-column:1/-1}
+input,select,textarea{width:100%;padding:8px;border:1px solid var(--b);border-radius:6px;background:var(--bg);color:var(--t);font:inherit}
+button{padding:7px 14px;border:0;border-radius:6px;background:var(--p);color:#fff;cursor:pointer;font:inherit}
+button.d{background:var(--r)}button.g{background:var(--m)}
+.wrap{overflow-x:auto}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px;border-bottom:1px solid var(--b);white-space:nowrap}
+td.n{white-space:normal}.bar{height:8px;background:var(--b);border-radius:4px;min-width:80px}.bar i{display:block;height:100%;background:var(--p);border-radius:4px}
+#msg{min-height:1.4em;color:var(--m)}
+</style></head><body><main>
+<h1>ระบบจัดการโครงงานนักศึกษา</h1>
+<div class="card"><h2 id="ft" style="font-size:1.05rem;margin-top:0">เพิ่มโครงงาน</h2>
+<form id="f"><input type="hidden" id="id">
+<div class="w"><input id="title" placeholder="ชื่อโครงงาน *" required maxlength="200"></div>
+<select id="status"><option>planning</option><option>development</option><option>testing</option><option>completed</option></select>
+<select id="advisor"><option value="">-- อาจารย์ที่ปรึกษา --</option></select>
+<div class="w"><textarea id="desc" rows="2" placeholder="รายละเอียด"></textarea></div>
+<div class="w"><button>บันทึก</button> <button type="button" class="g" id="cancel" hidden>ยกเลิก</button></div></form>
+<div id="msg"></div></div>
+<div class="card wrap"><table><thead><tr><th>ID</th><th>ชื่อโครงงาน</th><th>สถานะ</th><th>อาจารย์</th><th>สมาชิก</th><th>ความก้าวหน้า</th><th></th></tr></thead><tbody id="tb"></tbody></table></div>
+</main>
+<script>
+const $=i=>document.getElementById(i);
+async function api(url,opt){const r=await fetch(url,opt&&{...opt,headers:{"Content-Type":"application/json"}});
+ const j=await r.json();if(!j.success)throw new Error(j.error.message);return j}
+const say=t=>$("msg").textContent=t;
+function td(t,cls){const e=document.createElement("td");e.textContent=t;if(cls)e.className=cls;return e}
+function btn(t,cls,fn){const b=document.createElement("button");b.textContent=t;b.className=cls;b.onclick=fn;return b}
+async function load(){
+ const j=await api("/api/projects");$("tb").replaceChildren();
+ for(const p of j.data){const tr=document.createElement("tr");
+  tr.append(td(p.id),td(p.title,"n"),td(p.status),td(p.advisor_name||"-"),td(p.member_count));
+  const g=document.createElement("td"),b=document.createElement("div"),i=document.createElement("i");
+  b.className="bar";i.style.width=p.latest_percent+"%";b.append(i);g.append(b,p.latest_percent+"%");tr.append(g);
+  const a=document.createElement("td");
+  a.append(btn("แก้ไข","g",()=>edit(p))," ",btn("ลบ","d",()=>del(p)));tr.append(a);$("tb").append(tr)}}
+function edit(p){$("id").value=p.id;$("title").value=p.title;$("desc").value=p.description||"";
+ $("status").value=p.status;$("advisor").value=p.advisor_id||"";$("ft").textContent="แก้ไขโครงงาน #"+p.id;$("cancel").hidden=false;scrollTo(0,0)}
+function reset(){$("f").reset();$("id").value="";$("ft").textContent="เพิ่มโครงงาน";$("cancel").hidden=true}
+$("cancel").onclick=reset;
+async function del(p){if(!confirm("ลบ \""+p.title+"\" ?"))return;
+ try{await api("/api/projects/"+p.id,{method:"DELETE"});say("ลบสำเร็จ");load()}catch(e){say(e.message)}}
+$("f").onsubmit=async e=>{e.preventDefault();const id=$("id").value;
+ const body=JSON.stringify({title:$("title").value,description:$("desc").value,status:$("status").value,
+  advisor_id:$("advisor").value?+$("advisor").value:null});
+ try{await api(id?"/api/projects/"+id:"/api/projects",{method:id?"PUT":"POST",body});
+  say(id?"แก้ไขสำเร็จ":"เพิ่มสำเร็จ");reset();load()}catch(e){say(e.message)}};
+(async()=>{const j=await api("/api/advisors");
+ for(const a of j.data){const o=document.createElement("option");o.value=a.advisor_id;o.textContent=a.name;$("advisor").append(o)}
+ load()})();
+</script></body></html>
