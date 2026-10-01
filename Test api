@@ -1,0 +1,18 @@
+"""รัน: python test_api.py  (ใช้ฐานข้อมูลชั่วคราว ไม่กระทบ project.db)"""
+import os, tempfile
+os.environ["DB_PATH"] = os.path.join(tempfile.mkdtemp(), "t.db")
+from app import app
+c = app.test_client()
+def t(n, name, resp, expect):
+    print(f"{n} | {name:<28}| expect {expect} | actual {resp.status_code} | {'PASS' if resp.status_code==expect else 'FAIL'}")
+    return resp
+t(1,"GET /api/projects",c.get("/api/projects"),200)
+t(2,"POST /api/projects",c.post("/api/projects",json={"title":"โครงงานทดสอบ","advisor_id":1}),201)
+t(3,"PUT /api/projects/3",c.put("/api/projects/3",json={"title":"แก้ไขแล้ว","status":"testing"}),200)
+t(4,"DELETE /api/projects/3",c.delete("/api/projects/3"),200)
+t(5,"POST invalid (no title)",c.post("/api/projects",json={"status":"x"}),422)
+t(6,"GET not found",c.get("/api/projects/999"),404)
+t(7,"SQL injection in title",c.post("/api/projects",json={"title":"x'); DROP TABLE projects;--"}),201)
+t(8,"GET /api/projects (after)",c.get("/api/projects"),200)
+t(9,"POST progress 150",c.post("/api/projects/1/progress",json={"percent":150}),422)
+t(10,"POST progress 80",c.post("/api/projects/1/progress",json={"percent":80,"note":"ok"}),201)
