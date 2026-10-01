@@ -1,0 +1,48 @@
+PRAGMA foreign_keys = ON;
+CREATE TABLE advisors (
+  advisor_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name  TEXT NOT NULL,
+  email TEXT NOT NULL UNIQUE,
+  department TEXT
+);
+CREATE TABLE students (
+  student_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  student_code TEXT NOT NULL UNIQUE,
+  name  TEXT NOT NULL,
+  email TEXT
+);
+CREATE TABLE projects (
+  project_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  description TEXT,
+  status TEXT NOT NULL DEFAULT 'planning'
+    CHECK (status IN ('planning','development','testing','completed')),
+  advisor_id INTEGER REFERENCES advisors(advisor_id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE project_members (
+  project_id INTEGER NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,
+  student_id INTEGER NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,
+  role TEXT NOT NULL DEFAULT 'member',
+  PRIMARY KEY (project_id, student_id)
+);
+CREATE TABLE progress (
+  progress_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id INTEGER NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,
+  percent INTEGER NOT NULL CHECK (percent BETWEEN 0 AND 100),
+  note TEXT,
+  reported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+INSERT INTO advisors(name,email,department) VALUES
+ ('ผศ.ดร.สมชาย ใจดี','somchai@example.ac.th','วิทยาการคอมพิวเตอร์'),
+ ('อ.สุดา รักเรียน','suda@example.ac.th','เทคโนโลยีสารสนเทศ');
+INSERT INTO students(student_code,name,email) VALUES
+ ('6501001','นายก้องภพ สุขสม','kong@example.com'),
+ ('6501002','น.ส.มะลิ ดีงาม','mali@example.com'),
+ ('6501003','นายธนา เก่งกล้า','tana@example.com');
+INSERT INTO projects(title,description,status,advisor_id) VALUES
+ ('ระบบจัดการโครงงาน','เว็บระบบติดตามโครงงานนักศึกษา','development',1),
+ ('แอปแนะนำร้านอาหาร','แอปแนะนำร้านอาหารในโคราช','planning',2);
+INSERT INTO project_members VALUES (1,1,'leader'),(1,2,'member'),(2,3,'leader');
+INSERT INTO progress(project_id,percent,note) VALUES
+ (1,30,'ออกแบบฐานข้อมูลเสร็จ'),(1,60,'พัฒนา API เสร็จ'),(2,10,'เก็บความต้องการ');
