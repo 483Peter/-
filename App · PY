@@ -1,0 +1,203 @@
+import os, sqlite3
+from flask import Flask, g, jsonify, request
+
+BASE = os.path.dirname(os.path.abspath(__file__))
+DB = os.environ.get("DB_PATH", os.path.join(BASE, "project.db"))
+STATUSES = {"planning", "development", "testing", "completed"}
+app = Flask(__name__, static_folder="static", static_url_path="")
+
+def db():
+    if "db" not in g:
+        g.db = sqlite3.connect(DB)
+        g.db.row_factory = sqlite3.Row
+        g.db.execute("PRAGMA foreign_keys = ON")
+    return g.db
+
+@app.teardown_appcontext
+def close_db(_):
+    d = g.pop("db", None)
+    if d: d.close()
+
+def init_db():
+    c = sqlite3.connect(DB)
+    if not c.execute("SELECT 1 FROM sqlite_master WHERE name='projects'").fetchone():
+        c.executescript(open(os.path.join(BASE, "schema.sql"), encoding="utf-8").read())
+    c.close()
+
+def ok(data, code=200): return jsonify(success=True, data=data), code
+def fail(msg, code=400): return jsonify(success=False, error={"message": msg}), code
+
+def body():
+    d = request.get_json(silent=True)
+    return d if isinstance(d, dict) else None
+
+def validate_project(d, partial=False):
+    out = {}
+    if "title" in d or not partial:
+        t = d.get("title")
+        if not isinstance(t, str) or not t.strip() or len(t) > 200:
+            return None, "title ต้องเป็นข้อความ 1-200 ตัวอักษร"
+        out["title"] = t.strip()
+    if "description" in d:
+        if d["description"] is not None and not isinstance(d["description"], str):
+            return None, "description ต้องเป็นข้อความ"
+        out["description"] = d["description"]
+    if "status" in d:
+        if d["status"] not in STATUSES:
+            return None, "status ต้องเป็น " + ", ".join(sorted(STATUSES))
+        out["status"] = d["status"]
+    if "advisor_id" in d:
+        a = d["advisor_id"]
+        if a is not None:
+            if not isinstance(a, int) or not db().execute(
+                    "SELECT 1 FROM advisors WHERE advisor_id=?", (a,)).fetchone():
+                return None, "ไม่พบ advisor_id นี้"
+        out["advisor_id"] = a
+    return out, None
+
+LIST_SQL = """SELECT p.project_id AS id, p.title, p.description, p.status, p.created_at,
+  a.advisor_id, a.name AS advisor_name,
+  (SELECT COUNT(*) FROM project_members m WHERE m.project_id=p.project_id) AS member_count,
+  COALESCE((SELECT percent FROM progress g WHERE g.project_id=p.project_id
+            ORDER BY progress_id DESC LIMIT 1),0) AS latest_percent
+  FROM projects p LEFT JOIN advisors a ON a.advisor_id=p.advisor_id"""
+
+def project_exists(pid):
+    return db().execute("SELECT 1 FROM projects WHERE project_id=?", (pid,)).fetchone()
+
+# ---------- Projects ----------
+@app.get("/api/projects")
+def list_projects():
+    status = request.args.get("status")
+    if status:
+        rows = db().execute(LIST_SQL + " WHERE p.status=? ORDER BY p.project_id", (status,))
+    else:
+        rows = db().execute(LIST_SQL + " ORDER BY p.project_id")
+    data = [dict(r) for r in rows]
+    return jsonify(success=True, count=len(data), data=data)
+
+@app.get("/api/projects/<int:pid>")
+def get_project(pid):
+    r = db().execute(LIST_SQL + " WHERE p.project_id=?", (pid,)).fetchone()
+    if not r: return fail("ไม่พบโครงงาน", 404)
+    d = dict(r)
+    d["members"] = [dict(m) for m in db().execute(
+        """SELECT s.student_id,s.student_code,s.name,m.role FROM project_members m
+           JOIN students s ON s.student_id=m.student_id WHERE m.project_id=?""", (pid,))]
+    d["progress"] = [dict(x) for x in db().execute(
+        "SELECT progress_id,percent,note,reported_at FROM progress WHERE project_id=? ORDER BY progress_id", (pid,))]
+    return ok(d)
+
+@app.post("/api/projects")
+def create_project():
+    d = body()
+    if d is None: return fail("ต้องส่ง JSON object")
+    v, e = validate_project(d)
+    if e: return fail(e, 422)
+    cur = db().execute("INSERT INTO projects(title,description,status,advisor_id) VALUES(?,?,?,?)",
+        (v["title"], v.get("description"), v.get("status", "planning"), v.get("advisor_id")))
+    db().commit()
+    return ok({"id": cur.lastrowid}, 201)
+
+def update_project(pid, partial):
+    if not project_exists(pid): return fail("ไม่พบโครงงาน", 404)
+    d = body()
+    if d is None: return fail("ต้องส่ง JSON object")
+    v, e = validate_project(d, partial)
+    if e: return fail(e, 422)
+    if not v: return fail("ไม่มีข้อมูลที่จะแก้ไข", 422)
+    # ชื่อคอลัมน์มาจาก validate_project เท่านั้น (whitelist) ค่าใช้ ? เสมอ
+    sets = ", ".join(f"{k}=?" for k in v)
+    db().execute(f"UPDATE projects SET {sets} WHERE project_id=?", (*v.values(), pid))
+    db().commit()
+    return ok({"id": pid})
+
+@app.put("/api/projects/<int:pid>")
+def put_project(pid): return update_project(pid, False)
+
+@app.patch("/api/projects/<int:pid>")
+def patch_project(pid): return update_project(pid, True)
+
+@app.delete("/api/projects/<int:pid>")
+def delete_project(pid):
+    if not project_exists(pid): return fail("ไม่พบโครงงาน", 404)
+    db().execute("DELETE FROM projects WHERE project_id=?", (pid,))
+    db().commit()
+    return ok({"deleted": pid})
+
+# ---------- Progress / Members ----------
+@app.get("/api/projects/<int:pid>/progress")
+def get_progress(pid):
+    if not project_exists(pid): return fail("ไม่พบโครงงาน", 404)
+    return ok([dict(r) for r in db().execute(
+        "SELECT progress_id,percent,note,reported_at FROM progress WHERE project_id=? ORDER BY progress_id", (pid,))])
+
+@app.post("/api/projects/<int:pid>/progress")
+def add_progress(pid):
+    if not project_exists(pid): return fail("ไม่พบโครงงาน", 404)
+    d = body() or {}
+    p = d.get("percent")
+    if not isinstance(p, int) or isinstance(p, bool) or not 0 <= p <= 100:
+        return fail("percent ต้องเป็นจำนวนเต็ม 0-100", 422)
+    cur = db().execute("INSERT INTO progress(project_id,percent,note) VALUES(?,?,?)",
+                       (pid, p, str(d.get("note", ""))[:500]))
+    db().commit()
+    return ok({"progress_id": cur.lastrowid}, 201)
+
+@app.post("/api/projects/<int:pid>/members")
+def add_member(pid):
+    if not project_exists(pid): return fail("ไม่พบโครงงาน", 404)
+    d = body() or {}
+    sid = d.get("student_id")
+    if not isinstance(sid, int) or not db().execute(
+            "SELECT 1 FROM students WHERE student_id=?", (sid,)).fetchone():
+        return fail("ไม่พบ student_id นี้", 422)
+    db().execute("INSERT INTO project_members(project_id,student_id,role) VALUES(?,?,?)",
+                 (pid, sid, str(d.get("role", "member"))[:30]))
+    db().commit()
+    return ok({"project_id": pid, "student_id": sid}, 201)
+
+@app.delete("/api/projects/<int:pid>/members/<int:sid>")
+def remove_member(pid, sid):
+    cur = db().execute("DELETE FROM project_members WHERE project_id=? AND student_id=?", (pid, sid))
+    db().commit()
+    return ok({"removed": sid}) if cur.rowcount else fail("ไม่พบสมาชิกนี้ในโครงงาน", 404)
+
+# ---------- Students / Advisors ----------
+@app.get("/api/students")
+def list_students():
+    return ok([dict(r) for r in db().execute("SELECT * FROM students ORDER BY student_id")])
+
+@app.post("/api/students")
+def create_student():
+    d = body() or {}
+    code, name = d.get("student_code"), d.get("name")
+    if not (isinstance(code, str) and code.strip() and isinstance(name, str) and name.strip()):
+        return fail("ต้องระบุ student_code และ name", 422)
+    cur = db().execute("INSERT INTO students(student_code,name,email) VALUES(?,?,?)",
+                       (code.strip(), name.strip(), d.get("email")))
+    db().commit()
+    return ok({"student_id": cur.lastrowid}, 201)
+
+@app.get("/api/advisors")
+def list_advisors():
+    return ok([dict(r) for r in db().execute("SELECT * FROM advisors ORDER BY advisor_id")])
+
+# ---------- Error handlers ----------
+@app.errorhandler(404)
+def e404(_): return fail("ไม่พบ endpoint", 404)
+@app.errorhandler(405)
+def e405(_): return fail("Method ไม่รองรับ", 405)
+@app.errorhandler(sqlite3.IntegrityError)
+def e409(e): return fail("ข้อมูลซ้ำหรือขัดกับเงื่อนไขของฐานข้อมูล", 409)
+@app.errorhandler(Exception)
+def e500(e):
+    app.logger.exception(e)
+    return fail("เกิดข้อผิดพลาดภายในระบบ", 500)
+
+@app.get("/")
+def index(): return app.send_static_file("index.html")
+
+init_db()
+if __name__ == "__main__":
+    app.run(debug=os.environ.get("FLASK_DEBUG") == "1", port=5000)
